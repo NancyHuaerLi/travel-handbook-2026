@@ -437,6 +437,46 @@
     .section { padding-top: 36px; }
     .section-title { font-size: 26px; }
   }
+
+  /* ===== Add custom item ===== */
+  .add-item-wrap { margin-top: 16px; text-align: center; }
+  .add-item-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #fff; color: var(--blue);
+    border: 1.5px dashed var(--blue); border-radius: 12px;
+    padding: 10px 24px; font-size: 15px; font-weight: 600;
+    cursor: pointer; transition: all 0.2s;
+  }
+  .add-item-btn:hover { background: var(--blue-light); }
+  .add-item-form {
+    display: flex; gap: 8px; margin-top: 10px;
+    background: #fff; border-radius: 12px; padding: 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  .add-item-input {
+    flex: 1; border: 1px solid #d1d1d6; border-radius: 8px;
+    padding: 10px 12px; font-size: 15px; outline: none;
+  }
+  .add-item-input:focus { border-color: var(--blue); }
+  .add-item-submit {
+    background: var(--blue); color: #fff; border: none;
+    border-radius: 8px; padding: 10px 18px; font-size: 15px;
+    font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .add-item-cancel {
+    background: #f2f2f7; color: #666; border: none;
+    border-radius: 8px; padding: 10px 14px; font-size: 15px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .custom-items-card { margin-top: 16px; }
+  .custom-items-card .card-header { color: var(--purple); }
+  .custom-item { position: relative; padding-right: 36px; }
+  .custom-delete {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; color: #c7c7cc; font-size: 20px;
+    cursor: pointer; padding: 4px 8px; border-radius: 6px; line-height: 1;
+  }
+  .custom-delete:hover { color: var(--red); background: #ffe5e5; }
 </style>
 </head>
 <body>
@@ -689,6 +729,14 @@
       </p>
     </div>
   </div>
+  <div class="add-item-wrap">
+    <button class="add-item-btn" onclick="toggleAddForm('shop')">＋ 添加条目</button>
+    <div class="add-item-form" id="add-form-shop">
+      <input type="text" class="add-item-input" placeholder="输入新条目内容，按回车添加…" id="add-input-shop">
+      <button class="add-item-submit" onclick="submitAddItem('shop')">添加</button>
+      <button class="add-item-cancel" onclick="toggleAddForm('shop')">取消</button>
+    </div>
+  </div>
 </section>
 
 <!-- ============================================================ -->
@@ -915,6 +963,14 @@
       </div>
     </div>
   </div>
+  <div class="add-item-wrap">
+    <button class="add-item-btn" onclick="toggleAddForm('pack')">＋ 添加条目</button>
+    <div class="add-item-form" id="add-form-pack">
+      <input type="text" class="add-item-input" placeholder="输入新条目内容，按回车添加…" id="add-input-pack">
+      <button class="add-item-submit" onclick="submitAddItem('pack')">添加</button>
+      <button class="add-item-cancel" onclick="toggleAddForm('pack')">取消</button>
+    </div>
+  </div>
 </section>
 
 <!-- ============================================================ -->
@@ -1054,6 +1110,14 @@
       </p>
     </div>
   </div>
+  <div class="add-item-wrap">
+    <button class="add-item-btn" onclick="toggleAddForm('todo')">＋ 添加条目</button>
+    <div class="add-item-form" id="add-form-todo">
+      <input type="text" class="add-item-input" placeholder="输入新条目内容，按回车添加…" id="add-input-todo">
+      <button class="add-item-submit" onclick="submitAddItem('todo')">添加</button>
+      <button class="add-item-cancel" onclick="toggleAddForm('todo')">取消</button>
+    </div>
+  </div>
 </section>
 
 </div><!-- /container -->
@@ -1162,16 +1226,30 @@
     });
 
     client.on('message', function(topic, payload) {
-      // Extract checkbox ID from topic
       if (topic.indexOf(TOPIC_PREFIX) !== 0) return;
       var id = topic.substring(TOPIC_PREFIX.length);
       if (!id) return;
       var val = payload.toString();
-      var checked = (val === '1');
 
+      // ===== Custom item definitions =====
+      if (id.indexOf('custom/') === 0) {
+        var parts = id.substring(7).split('/');
+        if (parts.length >= 2) {
+          var cSection = parts[0];
+          var cItemId = parts.slice(1).join('/');
+          if (val) {
+            addOrUpdateCustomItem(cSection, cItemId, val);
+          } else {
+            removeCustomItem(cItemId);
+          }
+        }
+        return;
+      }
+
+      // ===== Checkbox state =====
+      var checked = (val === '1');
       var el = document.getElementById(id);
       if (el && el.checked !== checked) {
-        // Flash effect
         var li = el.closest('li');
         if (li) {
           li.classList.add('remote-flash');
@@ -1218,6 +1296,170 @@
     }
   }
 
+  // ===== Custom items (collaborative add/delete) =====
+  var customItems = {}; // itemId -> {section, text}
+  var CUSTOM_STORAGE_KEY = 'travel-custom-2026-' + ROOM_ID;
+  var SECTION_MAP = { shop: 'shopping', pack: 'packing', todo: 'todo' };
+
+  function loadCustomLocal() {
+    try {
+      var saved = localStorage.getItem(CUSTOM_STORAGE_KEY);
+      if (saved) customItems = JSON.parse(saved);
+    } catch(e) {}
+  }
+  function saveCustomLocal() {
+    try { localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(customItems)); } catch(e) {}
+  }
+
+  function getCustomCard(section) {
+    var sectionId = SECTION_MAP[section];
+    var sectionEl = document.getElementById(sectionId);
+    if (!sectionEl) return null;
+    var cardId = 'custom-card-' + section;
+    var card = document.getElementById(cardId);
+    if (!card) {
+      card = document.createElement('div');
+      card.className = 'card custom-items-card';
+      card.id = cardId;
+      card.innerHTML = '<div class="card-header">自定义条目</div>' +
+        '<div class="card-body"><ul class="checklist" id="custom-list-' + section + '"></ul></div>';
+      // Insert before the add-item-wrap
+      var wrap = sectionEl.querySelector('.add-item-wrap');
+      if (wrap) {
+        sectionEl.insertBefore(card, wrap);
+      } else {
+        sectionEl.appendChild(card);
+      }
+    }
+    return card;
+  }
+
+  function renderCustomItem(section, itemId, text) {
+    if (document.getElementById(itemId)) return; // already rendered
+    var card = getCustomCard(section);
+    if (!card) return;
+    var list = card.querySelector('.checklist');
+
+    var li = document.createElement('li');
+    li.className = 'custom-item';
+    li.id = 'li-' + itemId;
+
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id = itemId;
+    if (checks[itemId]) cb.checked = true;
+    cb.addEventListener('change', function() {
+      checks[itemId] = this.checked;
+      saveLocal();
+      publishState(itemId, this.checked);
+    });
+
+    var label = document.createElement('label');
+    label.htmlFor = itemId;
+    label.textContent = text;
+
+    var delBtn = document.createElement('button');
+    delBtn.className = 'custom-delete';
+    delBtn.innerHTML = '&times;';
+    delBtn.title = '删除此条目';
+    delBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (confirm('确定删除此条目？删除会同步给双方。')) {
+        deleteCustomItem(itemId);
+      }
+    });
+
+    li.appendChild(cb);
+    li.appendChild(label);
+    li.appendChild(delBtn);
+    list.appendChild(li);
+  }
+
+  function addOrUpdateCustomItem(section, itemId, text) {
+    if (!SECTION_MAP[section]) return;
+    customItems[itemId] = { section: section, text: text };
+    saveCustomLocal();
+    renderCustomItem(section, itemId, text);
+    // Update label text if already exists
+    var existing = document.getElementById(itemId);
+    if (existing) {
+      var lbl = existing.parentElement.querySelector('label');
+      if (lbl) lbl.textContent = text;
+    }
+  }
+
+  function removeCustomItem(itemId) {
+    delete customItems[itemId];
+    saveCustomLocal();
+    var li = document.getElementById('li-' + itemId);
+    if (li && li.parentElement) {
+      li.parentElement.removeChild(li);
+    }
+    // Remove empty custom card
+    var section = customItems[itemId] ? customItems[itemId].section : null;
+    for (var sec in SECTION_MAP) {
+      var list = document.getElementById('custom-list-' + sec);
+      if (list && list.children.length === 0) {
+        var card = document.getElementById('custom-card-' + sec);
+        if (card && card.parentElement) card.parentElement.removeChild(card);
+      }
+    }
+  }
+
+  function publishCustomItem(section, itemId, text) {
+    if (connected && client) {
+      client.publish(TOPIC_PREFIX + 'custom/' + section + '/' + itemId, text, { retain: true, qos: 0 });
+    }
+  }
+
+  window.toggleAddForm = function(section) {
+    var form = document.getElementById('add-form-' + section);
+    var input = document.getElementById('add-input-' + section);
+    if (form.style.display === 'flex') {
+      form.style.display = 'none';
+    } else {
+      form.style.display = 'flex';
+      input.value = '';
+      setTimeout(function() { input.focus(); }, 50);
+    }
+  };
+
+  window.submitAddItem = function(section) {
+    var input = document.getElementById('add-input-' + section);
+    var text = input.value.trim();
+    if (!text) return;
+    var itemId = 'custom-' + section + '-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4);
+    addOrUpdateCustomItem(section, itemId, text);
+    publishCustomItem(section, itemId, text);
+    input.value = '';
+    document.getElementById('add-form-' + section).style.display = 'none';
+  };
+
+  window.deleteCustomItem = function(itemId) {
+    var item = customItems[itemId];
+    var section = item ? item.section : null;
+    // Publish empty to clear retained message
+    if (connected && client && section) {
+      client.publish(TOPIC_PREFIX + 'custom/' + section + '/' + itemId, '', { retain: true, qos: 0 });
+    }
+    // Clear checkbox state retained message
+    publishState(itemId, false);
+    removeCustomItem(itemId);
+  };
+
+  // Enter key submits in add inputs
+  document.addEventListener('DOMContentLoaded', function() {
+    ['shop', 'pack', 'todo'].forEach(function(section) {
+      var input = document.getElementById('add-input-' + section);
+      if (input) {
+        input.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') { e.preventDefault(); window.submitAddItem(section); }
+        });
+      }
+    });
+  });
+
   // ===== Clear all =====
   window.clearAllChecks = function() {
     if (!confirm('确定清空全部勾选状态？这会同步给双方。')) return;
@@ -1254,6 +1496,13 @@
 
   // ===== Init =====
   loadLocal();
+  loadCustomLocal();
+  // Render locally-saved custom items before MQTT sync arrives
+  for (var cid in customItems) {
+    if (customItems.hasOwnProperty(cid)) {
+      renderCustomItem(customItems[cid].section, cid, customItems[cid].text);
+    }
+  }
   applyLocal();
   bindCheckboxes();
   setupNav();
